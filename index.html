@@ -94,6 +94,10 @@ nav{display:flex;align-items:center;justify-content:space-between;height:68px}
   -webkit-mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent);mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent)}
 .cinta-track{display:flex;gap:14px;width:max-content;padding-right:14px;animation:mq 55s linear infinite}
 .cinta:hover .cinta-track,.cinta:focus-within .cinta-track{animation-play-state:paused}
+/* Con JavaScript la franja la mueve el código (sigue al mouse / al dedo); la animación CSS queda de respaldo */
+.cinta-track.manual{animation:none;will-change:transform}
+.cinta.js-cinta{touch-action:pan-y;cursor:ew-resize}
+.cinta.arrastrando .clip{cursor:grabbing}
 @keyframes mq{to{transform:translateX(-50%)}}
 .clip{position:relative;flex:none;height:300px;aspect-ratio:9/16;padding:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--carbon2);cursor:pointer;color:#fff;font:inherit;text-align:left;transition:border-color .25s,transform .25s}
 .clip video{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;transition:transform .5s}
@@ -726,6 +730,54 @@ else {
     }), { threshold:0 });
     cintaTrack.querySelectorAll('.clip').forEach(b => ioClips.observe(b));
   }
+  moverCinta();
+}
+
+// Movimiento de la franja: sola hacia la izquierda; con el mouse encima, lo acompaña a la izquierda o derecha;
+// en táctil se arrastra con el dedo. Al soltar o salir, retoma sola desde donde quedó.
+function moverCinta() {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;   // queda quieta, con scroll manual
+  cintaTrack.classList.add('manual'); cinta.classList.add('js-cinta');
+  const VUELTA_S = 55, FACTOR = 1.5;    // segundos por vuelta completa; cuánto más rápido que el mouse se mueve
+  let mitad = cintaTrack.scrollWidth / 2;
+  let x = 0, meta = 0;                  // posición mostrada y posición buscada (la diferencia da la suavidad)
+  let encima = false, arrastre = null, arrastrado = false, visible = true, ultimoX = null, t0 = performance.now();
+  addEventListener('resize', () => { mitad = cintaTrack.scrollWidth / 2; });
+  if ('IntersectionObserver' in window) new IntersectionObserver(es => { visible = es[0].isIntersecting; }).observe(cinta);
+
+  cinta.addEventListener('pointerenter', e => { if (e.pointerType === 'mouse') { encima = true; ultimoX = e.clientX; } });
+  cinta.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { encima = false; ultimoX = null; } });
+  cinta.addEventListener('pointermove', e => {
+    if (e.pointerType === 'mouse') {
+      encima = true;   // por si el mouse ya estaba encima cuando cargó la página
+      if (ultimoX !== null) meta += (e.clientX - ultimoX) * FACTOR;   // la franja sigue al mouse
+      ultimoX = e.clientX;
+    } else if (arrastre) {
+      const dx = e.clientX - arrastre.x; arrastre.x = e.clientX;
+      if (Math.abs(e.clientX - arrastre.ini) > 8) { arrastrado = true; cinta.classList.add('arrastrando'); }
+      meta += dx; x = meta;                                         // con el dedo se mueve 1:1, sin retraso
+    }
+  });
+  cinta.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse') { arrastre = { x: e.clientX, ini: e.clientX }; arrastrado = false; } });
+  const soltar = () => { arrastre = null; cinta.classList.remove('arrastrando'); };
+  ['pointerup', 'pointercancel'].forEach(ev => cinta.addEventListener(ev, soltar));
+  // Si el dedo arrastró la franja, ese toque no abre el proyecto
+  cinta.addEventListener('click', e => { if (arrastrado) { e.stopPropagation(); e.preventDefault(); arrastrado = false; } }, true);
+
+  const paso = t => {
+    const dt = Math.min((t - t0) / 1000, .1); t0 = t;
+    if (visible && mitad > 0) {
+      const quieta = encima || arrastre || cinta.contains(document.activeElement);
+      if (!quieta) meta -= (mitad / VUELTA_S) * dt;                   // avance automático hacia la izquierda
+      x += (meta - x) * Math.min(1, dt * 10);                       // acercamiento suave a la meta
+      // vuelta infinita en ambos sentidos: la lista está duplicada, así que correr media lista no se nota
+      if (x <= -mitad) { x += mitad; meta += mitad; }
+      if (x > 0) { x -= mitad; meta -= mitad; }
+      cintaTrack.style.transform = `translate3d(${x}px,0,0)`;
+    }
+    requestAnimationFrame(paso);
+  };
+  requestAnimationFrame(paso);
 }
 modal.onclick = e => { if (e.target === modal) cerrar(); };
 addEventListener('keydown', e => {
@@ -747,7 +799,7 @@ function evaluar() {
 // Refleja el estado en el dibujo
 function dibujarCircuito() {
   const c = circuito;
-  // Estado de cada contacto: cerrado = conduce (oscuro + tramo de unión); abierto = gris claro con hueco
+  // Estado de cada contacto: cerrado = conduce (barras blancas + diagonal + tramo de unión); abierto = gris tenue con hueco
   const contacto = (id, cerrado) => { $('#ct'+id).classList.toggle('open', !cerrado); $('#link'+id).classList.toggle('closed', cerrado); };
   contacto('S2', !c.parada);    // S2 (NC): cerrado en reposo, se abre al presionarlo
   contacto('S1', c.partida);    // S1 (NA): abierto en reposo, se cierra al presionarlo
